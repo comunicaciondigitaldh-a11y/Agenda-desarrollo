@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Agenda Municipal - Desarrollo Humano</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; font-family: 'Sora', sans-serif; }
+    body { background: #f4f4f8; max-width: 480px; margin: 0 auto; min-height: 100vh; }
+    input, select, button { font-family: 'Sora', sans-serif; outline: none; }
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 4px; }
+    .header { background: #1a1a2e; padding: 18px 20px 14px; position: sticky; top: 0; z-index: 100; }
+    .header-sub { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.3); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 2px; }
+    .header-title { font-size: 17px; font-weight: 800; color: #fff; }
+    .content { padding: 20px 16px 110px; }
+    .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: #fff; border-top: 1px solid #e0e0ef; display: flex; overflow-x: auto; padding: 6px 4px 14px; z-index: 200; scrollbar-width: none; }
+    .bottom-nav::-webkit-scrollbar { display: none; }
+    .nav-btn { min-width: 52px; display: flex; flex-direction: column; align-items: center; border: none; cursor: pointer; padding: 4px 6px; font-size: 10px; transition: background 0.2s; border-radius: 0; }
+    .nav-dot { width: 11px; height: 11px; border-radius: 50%; margin-bottom: 2px; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: flex-end; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
+    .modal-box { background: #fff; border-radius: 24px 24px 0 0; padding: 24px 20px; width: 100%; max-width: 480px; max-height: 88vh; overflow-y: auto; animation: slideUp 0.25s ease; }
+    @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .cal-day { min-height: 54px; border-radius: 12px; padding: 6px 4px; display: flex; flex-direction: column; align-items: center; transition: transform 0.1s; }
+    .event-card { background: #fff; border-radius: 0 12px 12px 0; padding: 12px 14px; margin-bottom: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.07); transition: transform 0.15s; }
+    .event-card:hover { transform: translateX(4px); }
+    .badge { border-radius: 99px; padding: 2px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; display: inline-block; }
+    .form-box { border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+    .form-input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; font-size: 14px; }
+    .btn-primary { padding: 13px; border-radius: 14px; color: #fff; border: none; font-weight: 700; font-size: 15px; cursor: pointer; width: 100%; margin-bottom: 14px; }
+    .section-label { font-size: 12px; font-weight: 700; color: #888; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 10px; }
+    .loading { display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 16px; background: #f4f4f8; }
+    .pin-input { padding: 13px 20px; border-radius: 12px; font-size: 20px; text-align: center; width: 140px; letter-spacing: 10px; display: block; margin: 0 auto 8px; border: 2px solid #ddd; }
+  </style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script type="module">
+// ─── FIREBASE CONFIG ──────────────────────────────────────────────────────────
+const PROJECT_ID = "agenda-municipal-d4228";
+const API_KEY    = "AIzaSyAVL84wpaJcIO9hL1XzY91JK3SCxHuggm0";
+const BASE      = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
+
+const fsGet   = async (path) => { try { const r = await fetch(`${BASE}/${path}?key=${API_KEY}`); return r.ok ? r.json() : null; } catch { return null; } };
+const fsList  = async (col)  => { try { const r = await fetch(`${BASE}/${col}?key=${API_KEY}`); if (!r.ok) return []; const d = await r.json(); return (d.documents||[]).map(docToObj); } catch { return []; } };
+const fsAdd   = async (col, obj) => { try { const r = await fetch(`${BASE}/${col}?key=${API_KEY}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({fields:toFields(obj)}) }); return r.ok ? r.json() : null; } catch { return null; } };
+const fsSet   = async (path, obj) => { try { await fetch(`${BASE}/${path}?key=${API_KEY}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify({fields:toFields(obj)}) }); } catch {} };
+const fsDel   = async (path) => { try { await fetch(`${BASE}/${path}?key=${API_KEY}`, { method:"DELETE" }); } catch {} };
+
+const toFields = (obj) => {
+  const f = {};
+  for (const [k,v] of Object.entries(obj)) {
+    if (typeof v === "string")  f[k] = {stringValue: v};
+    else if (typeof v === "boolean") f[k] = {booleanValue: v};
+    else if (typeof v === "number")  f[k] = {integerValue: String(v)};
+    else if (Array.isArray(v))  f[k] = {arrayValue:{values: v.map(i => typeof i==="object" ? {mapValue:{fields:toFields(i)}} : {stringValue:String(i)})}};
+    else if (v && typeof v === "object") f[k] = {mapValue:{fields:toFields(v)}};
+  }
+  return f;
+};
+const fromField = (f) => {
+  if (!f) return "";
+  if (f.stringValue  !== undefined) return f.stringValue;
+  if (f.booleanValue !== undefined) return f.booleanValue;
+  if (f.integerValue !== undefined) return Number(f.integerValue);
+  if (f.arrayValue)  return (f.arrayValue.values||[]).map(v => v.mapValue ? fromFields(v.mapValue.fields) : fromField(v));
+  if (f.mapValue)    return fromFields(f.mapValue.fields||{});
+  return "";
+};
+const fromFields = (fields) => Object.fromEntries(Object.entries(fields).map(([k,v])=>[k,fromField(v)]));
+const docToObj   = (doc) => ({ id: doc.name.split("/").pop(), ...fromFields(doc.fields||{}) });
+
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const AREAS = [
+  { id:"deportes",            label:"Deportes",              color:"#DC2626", light:"#FEE2E2" },
+  { id:"promocion",           label:"Promoción",             color:"#7C3AED", light:"#EDE9FE" },
+  { id:"formacion",           label:"Formación Profesional", color:"#D97706", light:"#FEF3C7" },
+  { id:"genero",              label:"Género y Diversidad",   color:"#DB2777", light:"#FCE7F3" },
+  { id:"deporte_comunitario", label:"Deporte Comunitario",   color:"#2563EB", light:"#DBEAFE" },
+  { id:"educacion",           label:"Educación",             color:"#0891B2", light:"#CFFAFE" },
+  { id:"juventudes",          label:"Juventudes",            color:"#059669", light:"#D1FAE5" },
+  { id:"familia",             label:"Familia",               color:"#EA580C", light:"#FFEDD5" },
+  { id:"general",            label:"General",               color:"#475569", light:"#F1F5F9" },
+];
+const AREA_MAP = Object.fromEntries(AREAS.map(a=>[a.id,a]));
+const MONTHS   = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const DAYS     = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+const ADMIN_PIN = "1234";
+const DEFAULT_CONTACTS = [
+  { areaId:"_sub",             name:"Subsecretario/a (yo)",              phone:"", isMe:true },
+  { areaId:"deportes",         name:"Encargado/a Deportes",              phone:"" },
+  { areaId:"promocion",        name:"Encargado/a Promoción",             phone:"" },
+  { areaId:"formacion",        name:"Encargado/a Formación Profesional", phone:"" },
+  { areaId:"genero",           name:"Encargado/a Género y Diversidad",   phone:"" },
+  { areaId:"deporte_comunitario", name:"Encargado/a Deporte Comunitario",phone:"" },
+  { areaId:"educacion",        name:"Encargado/a Educación",             phone:"" },
+  { areaId:"juventudes",       name:"Encargado/a Juventudes",            phone:"" },
+  { areaId:"familia",          name:"Encargado/a Familia",               phone:"" },
+  { areaId:"general",          name:"Encargado/a General",               phone:"" },
+];
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let state = {
+  events: [], contacts: DEFAULT_CONTACTS, loading: true, error: false,
+  tab: "calendar", currentDate: new Date(),
+  modal: null, // { day, events, detail }
+  isAdmin: false,
+};
+
+const todayStr = () => new Date().toISOString().slice(0,10);
+const uid = () => Math.random().toString(36).slice(2,9);
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+const app = document.getElementById("app");
+function render() {
+  const s = state;
+  if (s.loading) { app.innerHTML = `<div class="loading"><div style="font-size:48px">📅</div><div style="font-weight:700;color:#1a1a2e;font-size:16px">Cargando agenda...</div><div style="font-size:12px;color:#888">Conectando con Firebase</div></div>`; return; }
+  if (s.error)   { app.innerHTML = `<div class="loading"><div style="font-size:48px">⚠️</div><div style="font-weight:700;color:#dc2626;font-size:16px">Error de conexión</div><div style="font-size:13px;color:#888;text-align:center;padding:0 20px">Verificá las reglas de Firestore</div><button onclick="loadData()" style="margin-top:12px;padding:10px 24px;border-radius:10px;background:#1a1a2e;color:#fff;border:none;font-weight:700;cursor:pointer">Reintentar</button></div>`; return; }
+
+  app.innerHTML = `
+    <div class="header">
+      <div class="header-sub">Municipalidad San Patricio del Chañar</div>
+      <div class="header-title">Secretaría de Desarrollo Humano</div>
+    </div>
+    <div class="content" id="content"></div>
+    ${renderNav()}
+    ${s.modal ? renderModal() : ""}
+  `;
+  document.getElementById("content").innerHTML = renderContent();
+  bindEvents();
+}
+
+function renderNav() {
+  const s = state;
+  const navBtnStyle = (active, color) => `background:${active ? (color||'#1a1a2e') : 'transparent'};border-radius:${active?'10px':'0'};color:${active?'#fff':'#aaa'};font-weight:${active?700:500};`;
+  let html = `<div class="bottom-nav">`;
+  html += `<button class="nav-btn" style="${navBtnStyle(s.tab==='calendar')}" onclick="setTab('calendar')"><span style="font-size:18px">📅</span><span>Agenda</span></button>`;
+  AREAS.forEach(a => {
+    const active = s.tab === a.id;
+    html += `<button class="nav-btn" style="background:${active?a.color:'transparent'};border-radius:${active?'10px':'0'};color:${active?'#fff':'#bbb'};font-weight:${active?700:500};" onclick="setTab('${a.id}')">
+      <div class="nav-dot" style="background:${active?'#fff':a.color};opacity:${active?1:0.7}"></div>
+      <span style="text-align:center;line-height:1.2;max-width:54px;white-space:nowrap">${a.label.split(" ")[0]}</span>
+    </button>`;
+  });
+  html += `<button class="nav-btn" style="${navBtnStyle(s.tab==='admin')}" onclick="setTab('admin')"><span style="font-size:18px">${s.isAdmin?'🔓':'⚙️'}</span><span>Admin</span></button>`;
+  html += `</div>`;
+  return html;
+}
+
+function renderContent() {
+  const s = state;
+  if (s.tab === "calendar") return renderCalendar();
+  if (s.tab === "admin")    return renderAdmin();
+  const area = AREA_MAP[s.tab];
+  if (area) return renderArea(area);
+  return "";
+}
+
+function renderCalendar() {
+  const s = state;
+  const d = s.currentDate;
+  const y = d.getFullYear(), m = d.getMonth();
+  const prefix = `${y}-${String(m+1).padStart(2,"0")}`;
+  const firstDay = new Date(y,m,1).getDay();
+  const daysInMonth = new Date(y,m+1,0).getDate();
+  const monthEvs = s.events.filter(e => e.date && e.date.startsWith(prefix));
+  const byDay = {};
+  monthEvs.forEach(e => { const dd=parseInt(e.date.split("-")[2]); if(!byDay[dd]) byDay[dd]=[]; byDay[dd].push(e); });
+
+  let html = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <button onclick="prevMonth()" style="background:none;border:none;font-size:26px;cursor:pointer;color:#1a1a2e;padding:4px 10px">‹</button>
+      <div style="text-align:center">
+        <div style="font-size:22px;font-weight:800;color:#1a1a2e">${MONTHS[m]}</div>
+        <div style="font-size:13px;color:#888">${y}</div>
+      </div>
+      <button onclick="nextMonth()" style="background:none;border:none;font-size:26px;cursor:pointer;color:#1a1a2e;padding:4px 10px">›</button>
+    </div>
+    <div class="calendar-grid" style="margin-bottom:8px">
+      ${DAYS.map(d=>`<div style="text-align:center;font-size:11px;font-weight:700;color:#888;padding:4px 0">${d}</div>`).join("")}
+    </div>
+    <div class="calendar-grid">
+  `;
+  for (let i=0;i<firstDay;i++) html += `<div></div>`;
+  for (let day=1;day<=daysInMonth;day++) {
+    const dateStr = `${prefix}-${String(day).padStart(2,"0")}`;
+    const dayEvs  = byDay[day]||[];
+    const isToday = dateStr === todayStr();
+    const hasDots = dayEvs.length > 0;
+    html += `<div class="cal-day" style="background:${isToday?'#1a1a2e':hasDots?'#f8f8ff':'#fff'};border:${isToday?'none':hasDots?'1px solid #e0e0ef':'1px solid #f0f0f0'};cursor:${hasDots?'pointer':'default'}"
+      onclick="${hasDots?`openDay(${day})`:''}">
+      <span style="font-size:13px;font-weight:${isToday?700:500};color:${isToday?'#fff':'#1a1a2e'}">${day}</span>
+      <div style="display:flex;flex-wrap:wrap;gap:2px;justify-content:center;margin-top:3px">
+        ${dayEvs.slice(0,3).map(ev=>`<div style="width:7px;height:7px;border-radius:50%;background:${AREA_MAP[ev.areaId]?.color||'#ccc'}"></div>`).join("")}
+        ${dayEvs.length>3?`<div style="font-size:9px;color:#888">+${dayEvs.length-3}</div>`:""}
+      </div>
+    </div>`;
+  }
+  html += `</div>`;
+
+  html += `<div style="margin-top:28px"><div class="section-label">Este mes</div>`;
+  if (monthEvs.length===0) html += `<div style="text-align:center;color:#bbb;padding:20px;font-size:14px">Sin actividades este mes</div>`;
+  else [...monthEvs].sort((a,b)=>a.date.localeCompare(b.date)).forEach(ev => { html += eventCardHTML(ev); });
+  html += `</div>`;
+  return html;
+}
+
+function eventCardHTML(ev) {
+  const a = AREA_MAP[ev.areaId];
+  return `<div class="event-card" style="border-left:4px solid ${a?.color||'#ccc'}" onclick="openEventDetail('${ev.id}')">
+    <div style="font-weight:700;font-size:14px;color:#1a1a2e;margin-bottom:4px">${ev.title}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <span style="font-size:12px;color:#666">🕐 ${ev.time}</span>
+      <span style="font-size:12px;color:#666">📍 ${ev.place}</span>
+    </div>
+    <div style="margin-top:6px"><span class="badge" style="background:${a?.light};color:${a?.color};border:1px solid ${a?.color}40">${a?.label}</span></div>
+  </div>`;
+}
+
+function renderArea(area) {
+  const a = AREA_MAP[area.id];
+  const areaEvs = state.events.filter(e=>e.areaId===area.id).sort((a,b)=>a.date.localeCompare(b.date));
+  let html = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div style="width:14px;height:14px;border-radius:50%;background:${a.color};flex-shrink:0"></div>
+      <div style="font-weight:800;font-size:18px;color:#1a1a2e">${a.label}</div>
+    </div>
+    <button class="btn-primary" style="background:${a.color}" onclick="toggleForm()">+ Cargar nuevo evento</button>
+    <div id="event-form" style="display:${state.formOpen?'block':'none'}">
+      <div style="background:#f8f8ff;border-radius:16px;padding:16px;margin-bottom:16px;border:1px solid ${a.color}30">
+        <div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:4px">Nombre del evento</label>
+        <input type="text" id="f-title" placeholder="Nombre..." class="form-input" value="${state.formData?.title||''}" oninput="updateFormField('title',this.value)"></div>
+        <div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:4px">Fecha</label>
+        <input type="date" id="f-date" class="form-input" value="${state.formData?.date||''}" onchange="updateFormField('date',this.value)"></div>
+        <div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:4px">Horario</label>
+        <input type="time" id="f-time" class="form-input" value="${state.formData?.time||''}" onchange="updateFormField('time',this.value)"></div>
+        <div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:4px">Lugar</label>
+        <input type="text" id="f-place" placeholder="Lugar..." class="form-input" value="${state.formData?.place||''}" oninput="updateFormField('place',this.value)"></div>
+        <div style="display:flex;gap:8px">
+          <button onclick="toggleForm()" style="flex:1;padding:11px;border-radius:10px;border:1px solid #ddd;background:#fff;cursor:pointer;font-weight:600;font-size:14px">Cancelar</button>
+          <button onclick="saveEvent('${area.id}')" style="flex:2;padding:11px;border-radius:10px;border:none;background:${a.color};color:#fff;cursor:pointer;font-weight:700;font-size:14px">Guardar evento</button>
+        </div>
+      </div>
+    </div>
+    <div class="section-label">Eventos del área</div>
+  `;
+  if (areaEvs.length===0) html += `<div style="text-align:center;color:#bbb;padding:20px;font-size:14px">Sin eventos cargados</div>`;
+  else areaEvs.forEach(ev => {
+    html += `<div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,0.07);border-left:4px solid ${a.color}">
+      <div style="font-weight:700;font-size:14px;color:#1a1a2e">${ev.title}</div>
+      <div style="font-size:12px;color:#666;margin-top:4px">📅 ${ev.date} &nbsp;🕐 ${ev.time} &nbsp;📍 ${ev.place}</div>
+      <div id="confirm-${ev.id}">
+        <button onclick="askConfirm('${ev.id}')" style="margin-top:8px;padding:5px 14px;border-radius:8px;border:1px solid #fee2e2;background:#fff5f5;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer">Cancelar evento</button>
+      </div>
+    </div>`;
+  });
+  return html;
+}
+
+function renderAdmin() {
+  if (!state.isAdmin) return `
+    <div style="text-align:center;padding:48px 20px">
+      <div style="font-size:52px;margin-bottom:16px">🔐</div>
+      <div style="font-weight:800;font-size:20px;color:#1a1a2e;margin-bottom:6px">Panel de Administración</div>
+      <div style="color:#888;margin-bottom:28px;font-size:14px">Ingresá tu PIN para continuar</div>
+      <input type="password" id="pin-input" class="pin-input" placeholder="••••" onkeydown="if(event.key==='Enter') doLogin()">
+      <div id="pin-error" style="color:#dc2626;font-size:13px;margin-bottom:12px;display:none">PIN incorrecto</div>
+      <button onclick="doLogin()" style="margin-top:8px;padding:12px 36px;border-radius:12px;background:#1a1a2e;color:#fff;border:none;font-weight:700;font-size:15px;cursor:pointer">Ingresar</button>
+      <div style="margin-top:14px;font-size:11px;color:#bbb">PIN: 1234</div>
+    </div>`;
+
+  const contacts = state.contacts;
+  let contactsHTML = contacts.map((c,i) => {
+    const isMe = c.isMe;
+    const a    = isMe ? null : AREA_MAP[c.areaId];
+    return `<div style="margin-bottom:12px;background:${isMe?'#f0f0f8':'#fff'};border-radius:12px;padding:12px;border-left:3px solid ${isMe?'#1a1a2e':(a?.color||'#ccc')}">
+      <input value="${c.name||''}" onchange="updateContact(${i},'name',this.value)" style="width:100%;padding:6px 0;border:none;border-bottom:1px solid #eee;font-size:13px;font-weight:700;color:#1a1a2e;background:transparent;margin-bottom:6px" placeholder="${isMe?'Tu nombre':'Nombre del encargado/a'}">
+      <div style="font-size:11px;color:${isMe?'#1a1a2e':'#888'};font-weight:${isMe?700:400}">${isMe?'👤 Mi número':(a?.label||'')}</div>
+      <input value="${c.phone||''}" onchange="updateContact(${i},'phone',this.value)" placeholder="+5492994..." style="margin-top:8px;width:100%;padding:8px 10px;border-radius:8px;border:1px solid #ddd;font-size:13px">
+    </div>`;
+  }).join("");
+
+  const upcoming = state.events.filter(e=>e.date>=todayStr()).sort((a,b)=>a.date.localeCompare(b.date));
+  let evOptions = upcoming.map(ev=>`<option value="${ev.id}">${ev.date} — ${ev.title}</option>`).join("");
+
+  let contactCheckboxes = contacts.map((c,i) => {
+    const isMe = c.isMe;
+    const a    = isMe ? null : AREA_MAP[c.areaId];
+    return `<label onclick="toggleContact(${i})" id="clabel-${i}" style="display:flex;align-items:center;gap:10px;padding:8px 4px;cursor:pointer;border-bottom:${i<contacts.length-1?'1px solid #f0f0f0':'none'};background:${isMe?'#f8f8ff':'transparent'};border-radius:${isMe?'8px':'0'}">
+      <div id="ccheck-${i}" style="width:20px;height:20px;border-radius:6px;border:2px solid #ddd;background:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s"></div>
+      <div style="width:8px;height:8px;border-radius:50%;background:${isMe?'#1a1a2e':(a?.color||'#ccc')};flex-shrink:0"></div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600;color:#1a1a2e">${c.name||''} ${isMe?'<span style="font-size:10px;background:#e0e0f0;border-radius:4px;padding:1px 5px">yo</span>':''}</div>
+        <div style="font-size:11px;color:#888">${isMe?'Subsecretaría':(a?.label||'')} ${c.phone?'· '+c.phone:'· sin número'}</div>
+      </div>
+    </label>`;
+  }).join("");
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div style="font-weight:800;font-size:18px;color:#1a1a2e">⚙️ Administración</div>
+      <button onclick="doLogout()" style="padding:6px 14px;border-radius:8px;border:1px solid #eee;background:#fff;color:#888;font-size:12px;cursor:pointer;font-weight:600">Cerrar sesión</button>
+    </div>
+    <div style="background:#f8f8ff;border-radius:16px;padding:16px;margin-bottom:20px">
+      <div style="font-weight:700;font-size:14px;color:#555;margin-bottom:14px">📱 Contactos</div>
+      ${contactsHTML}
+      <button onclick="doSaveContacts()" style="width:100%;padding:12px;border-radius:10px;border:none;background:#1a1a2e;color:#fff;font-weight:700;font-size:14px;cursor:pointer;margin-top:4px">💾 Guardar contactos</button>
+    </div>
+    <div style="background:#f0fff4;border-radius:16px;padding:16px;border:1px solid #bbf7d0">
+      <div style="font-weight:700;font-size:14px;color:#059669;margin-bottom:14px">📣 Difusión por WhatsApp</div>
+      <label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:6px">Evento</label>
+      <select id="sel-event" style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid #ddd;font-size:14px;margin-bottom:14px;background:#fff">
+        <option value="">— Elegí un evento —</option>${evOptions}
+      </select>
+      <label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:8px">Encargados a notificar</label>
+      <div style="background:#fff;border-radius:12px;padding:12px;margin-bottom:14px">${contactCheckboxes}</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button onclick="selectAllContacts()" style="flex:1;padding:9px;border-radius:9px;border:1px solid #bbf7d0;background:#fff;color:#059669;font-weight:700;font-size:12px;cursor:pointer">Todos</button>
+        <button onclick="clearContacts()" style="flex:1;padding:9px;border-radius:9px;border:1px solid #ddd;background:#fff;color:#888;font-weight:700;font-size:12px;cursor:pointer">Limpiar</button>
+      </div>
+      <button onclick="doSend()" style="width:100%;padding:14px;border-radius:12px;border:none;background:#25D366;color:#fff;font-weight:700;font-size:15px;cursor:pointer">💬 Enviar por WhatsApp (<span id="sel-count">0</span>)</button>
+    </div>`;
+}
+
+function renderModal() {
+  const { day, events: dayEvs, detail } = state.modal;
+  const m = state.currentDate.getMonth();
+  if (detail) {
+    const a = AREA_MAP[detail.areaId];
+    return `<div class="modal-overlay" onclick="closeModal()">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <button onclick="backModal()" style="background:none;border:none;color:#888;font-size:14px;cursor:pointer;margin-bottom:14px">← Volver</button>
+        <div style="border-left:4px solid ${a?.color};padding-left:14px">
+          <div style="font-weight:800;font-size:20px;color:#1a1a2e;margin-bottom:8px">${detail.title}</div>
+          <span class="badge" style="background:${a?.light};color:${a?.color};border:1px solid ${a?.color}40">${a?.label}</span>
+          <div style="margin-top:16px;display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;gap:10px"><span style="font-size:18px">📅</span><div><div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase">Fecha</div><div style="font-size:15px;color:#1a1a2e;font-weight:600">${detail.date}</div></div></div>
+            <div style="display:flex;gap:10px"><span style="font-size:18px">🕐</span><div><div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase">Horario</div><div style="font-size:15px;color:#1a1a2e;font-weight:600">${detail.time}</div></div></div>
+            <div style="display:flex;gap:10px"><span style="font-size:18px">📍</span><div><div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase">Lugar</div><div style="font-size:15px;color:#1a1a2e;font-weight:600">${detail.place}</div></div></div>
+            ${detail.observations?`<div style="display:flex;gap:10px"><span style="font-size:18px">📝</span><div><div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase">Observaciones</div><div style="font-size:14px;color:#444;line-height:1.5">${detail.observations}</div></div></div>`:""}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+  return `<div class="modal-overlay" onclick="closeModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div style="font-weight:800;font-size:18px;color:#1a1a2e;margin-bottom:16px">${MONTHS[m]} ${day}</div>
+      ${dayEvs.map(ev => eventCardHTML(ev)).join("")}
+    </div>
+  </div>`;
+}
+
+// ─── ACTIONS ─────────────────────────────────────────────────────────────────
+let selectedContactIdxs = [];
+
+function bindEvents() {}
+
+window.setTab = (tab) => { state.tab = tab; render(); };
+window.prevMonth = () => { const d=state.currentDate; state.currentDate=new Date(d.getFullYear(),d.getMonth()-1,1); render(); };
+window.nextMonth = () => { const d=state.currentDate; state.currentDate=new Date(d.getFullYear(),d.getMonth()+1,1); render(); };
+window.openDay  = (day) => {
+  const y=state.currentDate.getFullYear(), m=state.currentDate.getMonth();
+  const prefix=`${y}-${String(m+1).padStart(2,"0")}`;
+  const dayEvs = state.events.filter(e=>e.date&&e.date.startsWith(prefix)&&parseInt(e.date.split("-")[2])===day);
+  state.modal = { day, events: dayEvs, detail: null };
+  render();
+};
+window.openEventDetail = (id) => {
+  const ev = state.events.find(e=>e.id===id);
+  if (!ev) return;
+  if (state.modal) { state.modal.detail = ev; render(); return; }
+  state.modal = { day: parseInt(ev.date.split("-")[2]), events: [ev], detail: ev };
+  render();
+};
+window.closeModal = () => { state.modal = null; render(); };
+window.backModal  = () => { state.modal.detail = null; render(); };
+
+window.toggleForm = () => {
+  state.formOpen = !state.formOpen;
+  if (!state.formOpen) state.formData = { title:"", date:"", time:"", place:"" };
+  const f = document.getElementById("event-form");
+  if (f) f.style.display = state.formOpen ? "block" : "none";
+};
+
+window.updateFormField = (field, val) => {
+  if (!state.formData) state.formData = {};
+  state.formData[field] = val;
+};
+
+window.saveEvent = async (areaId) => {
+  const title = document.getElementById("f-title")?.value?.trim();
+  const date  = document.getElementById("f-date")?.value;
+  const time  = document.getElementById("f-time")?.value;
+  const place = document.getElementById("f-place")?.value?.trim();
+  if (!title||!date||!time||!place) { alert("Completá todos los campos."); return; }
+  const data = { title, date, time, place, areaId, observations:"" };
+  const doc  = await fsAdd("events", data);
+  if (doc) { state.events.push({ id: doc.name.split("/").pop(), ...data }); }
+  state.formOpen = false;
+  state.formData = { title:"", date:"", time:"", place:"" };
+  render();
+};
+
+window.askConfirm = (id) => {
+  const box = document.getElementById(`confirm-${id}`);
+  if (!box) return;
+  box.innerHTML = `<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span style="font-size:12px;color:#dc2626;font-weight:600">¿Borrar este evento?</span>
+    <button onclick="deleteEvent('${id}')" style="padding:5px 14px;border-radius:8px;border:none;background:#dc2626;color:#fff;font-size:12px;font-weight:700;cursor:pointer">Sí, borrar</button>
+    <button onclick="render()" style="padding:5px 14px;border-radius:8px;border:1px solid #ddd;background:#fff;color:#666;font-size:12px;font-weight:600;cursor:pointer">No</button>
+  </div>`;
+};
+
+window.deleteEvent = async (id) => {
+  await fsDel(`events/${id}`);
+  state.events = state.events.filter(e=>e.id!==id);
+  if (state.modal) { state.modal.events = state.modal.events.filter(e=>e.id!==id); if(state.modal.detail?.id===id) state.modal.detail=null; }
+  render();
+};
+
+window.doLogin = () => {
+  const val = document.getElementById("pin-input")?.value;
+  if (val === ADMIN_PIN) { state.isAdmin=true; render(); }
+  else { const err=document.getElementById("pin-error"); if(err) err.style.display="block"; }
+};
+window.doLogout = () => { state.isAdmin=false; render(); };
+
+window.updateContact = (i, field, val) => { state.contacts[i][field] = val; };
+
+window.doSaveContacts = async () => {
+  await fsSet("config/contacts", { list: state.contacts });
+  alert("✅ Contactos guardados.");
+};
+
+window.toggleContact = (i) => {
+  const idx = selectedContactIdxs.indexOf(i);
+  if (idx>=0) selectedContactIdxs.splice(idx,1); else selectedContactIdxs.push(i);
+  const box = document.getElementById(`ccheck-${i}`);
+  const checked = selectedContactIdxs.includes(i);
+  if (box) { box.style.background=checked?"#059669":"#fff"; box.style.borderColor=checked?"#059669":"#ddd"; box.innerHTML=checked?'<span style="color:#fff;font-size:13px;line-height:1">✓</span>':""; }
+  const cnt = document.getElementById("sel-count");
+  if (cnt) cnt.textContent = selectedContactIdxs.length;
+};
+
+window.selectAllContacts = () => {
+  selectedContactIdxs = state.contacts.map((_,i)=>i);
+  render();
+  selectedContactIdxs.forEach(i => { const box=document.getElementById(`ccheck-${i}`); if(box){box.style.background="#059669";box.style.borderColor="#059669";box.innerHTML='<span style="color:#fff;font-size:13px;line-height:1">✓</span>';} });
+  const cnt=document.getElementById("sel-count"); if(cnt) cnt.textContent=selectedContactIdxs.length;
+};
+
+window.clearContacts = () => { selectedContactIdxs=[]; render(); const cnt=document.getElementById("sel-count"); if(cnt) cnt.textContent=0; };
+
+window.doSend = () => {
+  const evId = document.getElementById("sel-event")?.value;
+  const ev   = state.events.find(e=>e.id===evId);
+  if (!ev) { alert("Seleccioná un evento."); return; }
+  if (selectedContactIdxs.length===0) { alert("Seleccioná al menos un encargado."); return; }
+  const area    = AREA_MAP[ev.areaId];
+  const targets = selectedContactIdxs.map(i=>state.contacts[i]).filter(c=>c.phone&&c.phone.trim());
+  if (targets.length===0) { alert("Los encargados seleccionados no tienen número cargado."); return; }
+  const msg = `🔔 *Recordatorio de evento*\n\n📌 *${ev.title}*\n📅 ${ev.date}\n🕐 ${ev.time}\n📍 ${ev.place}\n\n_Área: ${area?.label}_`;
+  if (targets.length===1) {
+    const num = targets[0].phone.replace(/\D/g,"");
+    window.open(`https://wa.me/${num}?text=${encodeURIComponent(msg)}`, "_blank");
+  } else {
+    navigator.clipboard.writeText(msg).then(()=>{ alert("✅ Mensaje copiado. Pegalo en tu lista de difusión de WhatsApp."); window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`,"_blank"); }).catch(()=>{ window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`,"_blank"); });
+  }
+};
+
+// ─── LOAD DATA ────────────────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const [evs, contactDoc] = await Promise.all([
+      fsList("events"),
+      fsGet("config/contacts"),
+    ]);
+    state.events = evs;
+    if (contactDoc?.fields?.list) {
+      const loaded = fromField(contactDoc.fields.list);
+      if (Array.isArray(loaded) && loaded.length > 0) state.contacts = loaded;
+    }
+    state.loading = false;
+    state.error   = false;
+  } catch(e) {
+    state.error   = true;
+    state.loading = false;
+  }
+  // No re-renderizar si el formulario está abierto para no perder los datos
+  if (!state.formOpen) render();
+}
+
+window.loadData = loadData;
+loadData();
+setInterval(loadData, 20000);
+</script>
+</body>
+</html>
